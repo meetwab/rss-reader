@@ -38,6 +38,30 @@ class RssManager:
     def __init__(self):
         self.article_fetcher = ArticleFetcher()
 
+    def delete_subscrption(self, number: int):
+        """
+        删除指定的订阅。
+
+        Args:
+            number (int): 要删除的订阅序号。
+        """
+        # 获取指定的订阅序号的订阅源
+        subscriptions = self.load_subscriptions("subscriptions.json")
+        if not subscriptions:
+            print("❌ 订阅列表为空，无法删除。")
+            return
+        if number < 1 or number > len(subscriptions):
+            print(f"❌ 无效的订阅序号：{number}。请提供有效的序号。")
+            return
+        # 获取订阅标题
+        subscription_name = list(subscriptions.keys())[number - 1]
+        # 删除订阅
+        del subscriptions[subscription_name]
+        # 将更新后的订阅列表保存回文件
+        with open("subscriptions.json", "w", encoding="utf-8") as f:
+            json.dump(subscriptions, f, ensure_ascii=False, indent=2)
+        print(f"🎉 订阅 '{subscription_name}' 已成功删除！")
+
     def save_subscription(self, link: str):
         """
         根据给定的链接，获取 RSS 源的标题并保存到订阅文件中。
@@ -146,6 +170,7 @@ class RssManager:
             
             # 提供操作选项
             print("\n操作选项：")
+            print("[d] 删除订阅")
             print(f"[1-{len(subscriptions)}] 进入对应订阅查看文章")
             print("[0] 返回首页")
             
@@ -155,6 +180,15 @@ class RssManager:
                 if choice == "0":
                     return  # 返回首页
                 
+                if choice.lower() == "d":
+                    # 删除订阅
+                    try:
+                        number = int(input("请输入要删除的订阅序号："))
+                        self.delete_subscrption(number)
+                    except ValueError:
+                        print("❌ 无效的序号，请输入数字。")
+                    continue
+
                 choice_num = int(choice)
                 if 1 <= choice_num <= len(subscriptions):
                     # 获取用户选择的订阅
