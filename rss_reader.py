@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 try:
-    import requests
+    import requests1
     import feedparser
 except ImportError:
     print("❌ 缺少必要的依赖库！")

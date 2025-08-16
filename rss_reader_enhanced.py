@@ -23,7 +23,7 @@ except ImportError:
     print("请运行以下命令安装：")
     print("pip install requests feedparser")
     sys.exit(1)
-
+    
 
 class RSSReaderEnhanced:
     def __init__(self):
@@ -34,13 +34,14 @@ class RSSReaderEnhanced:
         self.cache = {}
         self.load_subscriptions()
         self.load_cache()
-        
+
         # 请求头，避免被某些网站拒绝
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml'
         }
-    
+
+
     def load_subscriptions(self):
         """从本地文件加载订阅源"""
         if os.path.exists(self.config_file):
