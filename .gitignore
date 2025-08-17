@@ -54,3 +54,9 @@ venv.bak/
 # RSS 相关临时文件
 *.xml.tmp
 *.rss.tmp
+
+# 配置文件（包含敏感信息）
+config.json
+
+# Markdown 文档文件
+*.md

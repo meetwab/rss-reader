@@ -14,10 +14,11 @@ from .rss_parser import RssParser
 class SubscriptionManager:
     """订阅管理器，负责订阅的增删改查"""
     
-    def __init__(self, article_manager: ArticleManager, filename: str = "subscriptions.json"):
+    def __init__(self, article_manager: ArticleManager, ai_summarizer=None, filename: str = "subscriptions.json"):
         self.filename = filename
         self.file_handler = FileHandler()
-        self.rss_parser = RssParser(article_manager=article_manager)
+        # 使用传入的AI摘要器创建RssParser，避免重复初始化
+        self.rss_parser = RssParser(article_manager=article_manager, ai_summarizer=ai_summarizer)
         self.console = Console()
     
     def add_subscription(self, url: str) -> bool:
@@ -32,7 +33,7 @@ class SubscriptionManager:
             bool: 是否添加成功
         """
         title, success = self.rss_parser.fetch_feed_info(url)
-        if not success:
+        if not success or not title:
             return False
         
         # 加载现有订阅

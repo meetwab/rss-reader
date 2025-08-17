@@ -22,11 +22,166 @@ class UserInterface:
     """用户界面处理器，负责用户交互和界面显示"""
     
     def __init__(self):
+        # 导入 AI 摘要器
+        from .ai_summarizer_refactored import create_ai_summarizer_from_config
+        
+        # 创建共享的 AI 摘要器实例
+        self.ai_summarizer = create_ai_summarizer_from_config()
+        
+        # 创建其他组件，传入共享的 AI 摘要器
         self.article_manager = ArticleManager()
-        self.subscription_manager = SubscriptionManager(article_manager=self.article_manager)
-        self.rss_parser = RssParser(article_manager=self.article_manager)
+        self.subscription_manager = SubscriptionManager(
+            article_manager=self.article_manager, 
+            ai_summarizer=self.ai_summarizer
+        )
+        self.rss_parser = RssParser(
+            article_manager=self.article_manager, 
+            ai_summarizer=self.ai_summarizer
+        )
         self.console = Console()
     
+    def _format_summary_text(self, text: str, width: int = 75) -> str:
+        """
+        改进的文本格式化函数，更好地处理中文和列表格式
+        
+        Args:
+            text: 要格式化的文本
+            width: 每行最大字符数
+            
+        Returns:
+            格式化后的文本
+        """
+        if not text:
+            return text
+        
+        # 对于较短的文本，直接返回
+        if len(text) <= width:
+            return text
+        
+        lines = text.split('\n')
+        formatted_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                formatted_lines.append('')
+                continue
+            
+            # 如果行不太长，直接添加
+            if len(line) <= width:
+                formatted_lines.append(line)
+                continue
+                
+            # 对于长行，进行智能分割
+            if line.startswith(('- ', '• ', '* ', '1. ', '2. ', '3. ')):
+                # 列表项的处理
+                formatted_lines.extend(self._format_list_item(line, width))
+            else:
+                # 普通段落的处理
+                formatted_lines.extend(self._format_paragraph(line, width))
+        
+        return '\n'.join(formatted_lines)
+    
+    def _format_list_item(self, line: str, width: int) -> List[str]:
+        """
+        格式化列表项
+        
+        Args:
+            line: 列表项文本
+            width: 最大宽度
+            
+        Returns:
+            格式化后的行列表
+        """
+        # 提取列表标记
+        marker = ''
+        content = line
+        for prefix in ['- ', '• ', '* ', '1. ', '2. ', '3. ', '4. ', '5. ']:
+            if line.startswith(prefix):
+                marker = prefix
+                content = line[len(prefix):].strip()
+                break
+        
+        if not marker:
+            # 不是标准列表项，按普通段落处理
+            return self._format_paragraph(line, width)
+        
+        formatted_lines = []
+        remaining = content
+        is_first_line = True
+        
+        while remaining:
+            available_width = width - (len(marker) if is_first_line else 2)
+            
+            if len(remaining) <= available_width:
+                # 剩余内容可以放在一行
+                if is_first_line:
+                    formatted_lines.append(marker + remaining)
+                else:
+                    formatted_lines.append('  ' + remaining)
+                break
+            
+            # 寻找合适的断点
+            breakpoint = self._find_breakpoint(remaining, available_width)
+            
+            if is_first_line:
+                formatted_lines.append(marker + remaining[:breakpoint])
+                is_first_line = False
+            else:
+                formatted_lines.append('  ' + remaining[:breakpoint])
+            
+            remaining = remaining[breakpoint:].lstrip()
+        
+        return formatted_lines
+    
+    def _format_paragraph(self, line: str, width: int) -> List[str]:
+        """
+        格式化普通段落
+        
+        Args:
+            line: 段落文本
+            width: 最大宽度
+            
+        Returns:
+            格式化后的行列表
+        """
+        formatted_lines = []
+        remaining = line
+        
+        while remaining:
+            if len(remaining) <= width:
+                formatted_lines.append(remaining)
+                break
+            
+            breakpoint = self._find_breakpoint(remaining, width)
+            formatted_lines.append(remaining[:breakpoint])
+            remaining = remaining[breakpoint:].lstrip()
+        
+        return formatted_lines
+    
+    def _find_breakpoint(self, text: str, max_width: int) -> int:
+        """
+        查找合适的断点位置
+        
+        Args:
+            text: 文本内容
+            max_width: 最大宽度
+            
+        Returns:
+            断点位置
+        """
+        if len(text) <= max_width:
+            return len(text)
+        
+        # 在标点符号处寻找断点
+        punctuation = '，。！？；：、 ,.!?;: '
+        for i in range(min(max_width, len(text) - 1), max(max_width // 2, 0), -1):
+            if text[i] in punctuation:
+                return i + 1
+        
+        # 如果没有找到合适的标点符号，直接在最大宽度处断开
+        return max_width
+
     def show_main_menu(self):
         """显示美化的主菜单"""
         main_menu = Panel(
@@ -120,13 +275,13 @@ class UserInterface:
             title_text.append(f"{i}. ", style="bold magenta")
             title_text.append(article['title'], style="bold white")
             
-            # 处理摘要文本，确保换行美观
-            summary = article['summary']
+            # 优先使用 AI 摘要，如果没有则使用原始摘要
+            summary = article.get('ai_summary') or article['summary']
             if len(summary) > 400:
                 summary = summary[:397] + "..."
             
-            # 使用 textwrap 为长摘要添加适当的换行
-            wrapped_summary = textwrap.fill(summary, width=80)
+            # 改进的文本格式化，更好地处理中文和列表格式
+            wrapped_summary = self._format_summary_text(summary)
             
             # 创建文章内容，添加时间信息
             article_content = f"""[bold blue]🔗 链接:[/bold blue] [link={article['link']}]{article['link']}[/link]"""

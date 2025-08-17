@@ -14,15 +14,25 @@ from bs4 import BeautifulSoup
 from rich.console import Console
 
 from .article_manager import ArticleManager
+from .ai_summarizer_refactored import create_ai_summarizer_from_config
 
 
 class RssParser:
     """RSS 解析器，负责网络请求和 RSS 源解析"""
     
-    def __init__(self, article_manager: ArticleManager, timeout: int = 10):
+    def __init__(self, article_manager: ArticleManager, ai_summarizer=None, timeout: int = 10, enable_ai_summary: bool = True):
         self.timeout = timeout
         self.console = Console()
         self.article_manager = article_manager
+        self.enable_ai_summary = enable_ai_summary
+        
+        # 使用传入的 AI 摘要器，如果没有传入则创建新的
+        if ai_summarizer is not None:
+            self.ai_summarizer = ai_summarizer
+        elif self.enable_ai_summary:
+            self.ai_summarizer = create_ai_summarizer_from_config()
+        else:
+            self.ai_summarizer = None
     
     def fetch_feed_info(self, url: str) -> Tuple[Optional[str], bool]:
         """
@@ -44,7 +54,7 @@ class RssParser:
             if feed.bozo:
                 print(f" 警告：链接 {url} 可能不是一个有效的 RSS/Atom 源。错误：{feed.bozo_exception}")
 
-            title = feed.feed.get("title")
+            title = getattr(feed.feed, 'title', None) if hasattr(feed, 'feed') else None
             if not title:
                 print(" 无法从链接中获取标题，将使用默认名称。")
                 # 添加微秒级时间戳和随机数，确保名称唯一性
@@ -98,12 +108,23 @@ class RssParser:
             # 获取新文章
             new_articles = []
             for entry in feed.entries[:count]:
+                # 基础文章信息
+                title = str(entry.get("title", "无标题"))
+                link = str(entry.get("link", "无链接"))
+                summary_raw = entry.get("summary", "无摘要")
+                original_summary = self._clean_html(str(summary_raw) if summary_raw else "无摘要")
+                published = str(entry.get("published", ""))
+                fetch_time = datetime.now().isoformat()
+                
+                # 注意：AI摘要的生成已移到 _enhance_articles_with_ai 方法中
+                # 在 fetch_and_save_articles 流程中进行AI增强处理
                 article = {
-                    'title': entry.get("title", "无标题"),
-                    'link': entry.get("link", "无链接"),
-                    'summary': self._clean_html(entry.get("summary", "无摘要")),
-                    'published': entry.get("published", ""),
-                    'fetch_time': datetime.now().isoformat()
+                    'title': title,
+                    'link': link,
+                    'summary': original_summary,
+                    'ai_summary': None,  # 新文章先设为None，稍后进行AI增强时生成
+                    'published': published,
+                    'fetch_time': fetch_time
                 }
                 new_articles.append(article)
             
@@ -128,9 +149,45 @@ class RssParser:
             print(" ❓ 处理文章时发生未知错误，请稍后重试")
             return []
     
+    def _enhance_articles_with_ai(self, articles: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """
+        使用AI对文章进行增强处理（摘要生成等）
+        
+        职责：
+        1. 为新文章生成AI摘要
+        2. 可扩展支持其他AI功能（关键词提取、分类等）
+        3. 保持原有文章数据结构不变
+        
+        Args:
+            articles (List[Dict[str, str]]): 原始文章列表
+            
+        Returns:
+            List[Dict[str, str]]: AI增强后的文章列表
+        """
+        enhanced_articles = []
+        
+        for article in articles:
+            # 生成AI摘要（如果需要且可用）
+            if not article.get('ai_summary') and self.ai_summarizer and self.ai_summarizer.is_enabled():
+                print(f"  正在为文章「{article['title']}」生成 AI 摘要...")
+                ai_summary = self.ai_summarizer.generate_summary(article['title'], article['summary'])
+                if ai_summary:
+                    article['ai_summary'] = ai_summary
+                    print(f"  ✅ AI 摘要生成成功")
+                else:
+                    print(f"  ⚠️ AI 摘要生成失败，将使用原始摘要")
+            
+            # 未来可以在这里添加更多AI增强功能：
+            # article = self._extract_keywords(article)
+            # article = self._classify_article(article)
+            
+            enhanced_articles.append(article)
+        
+        return enhanced_articles
+    
     def fetch_and_save_articles(self, url: str, count: int = 3) -> List[Dict[str, str]]:
         """
-        获取 RSS 源的最新文章并保存到 articles_history.json 文件中。
+        获取 RSS 源的最新文章，进行AI增强处理，然后保存到历史记录
 
         Args:
             url (str): RSS 源链接
@@ -139,12 +196,46 @@ class RssParser:
         Returns:
             List[Dict[str, str]]: 文章列表
         """
-        # 获取新文章
+        # 1. 获取原始文章
         new_articles = self.fetch_articles(url, count)
         
-        # 如果获取成功，则更新历史记录
+        # 2. 如果获取成功，识别真正的新文章，进行AI增强，再保存
         if new_articles:
-            self.article_manager.update_articles_history(url, new_articles)
+            # 识别哪些是真正的新文章（避免对已存在的文章重复处理）
+            truly_new_articles = self._filter_new_articles(url, new_articles)
+            
+            # 只对真正的新文章进行AI增强处理
+            if truly_new_articles:
+                enhanced_new_articles = self._enhance_articles_with_ai(truly_new_articles)
+                
+                # 保存到历史记录（ArticleManager只负责存储）
+                self.article_manager.update_articles_history(url, enhanced_new_articles)
+        
+        return new_articles
+    
+    def _filter_new_articles(self, url: str, articles: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """
+        过滤出真正的新文章（基于链接去重）
+        
+        Args:
+            url (str): RSS源链接
+            articles (List[Dict[str, str]]): 待检查的文章列表
+            
+        Returns:
+            List[Dict[str, str]]: 真正的新文章列表
+        """
+        # 获取现有文章的链接集合
+        articles_history = self.article_manager.file_handler.load_articles_history(
+            self.article_manager.articles_history_file
+        )
+        existing_articles = articles_history.get(url, [])
+        existing_links = {article['link'] for article in existing_articles}
+        
+        # 只返回链接不存在的新文章
+        new_articles = []
+        for article in articles:
+            if article['link'] not in existing_links:
+                new_articles.append(article)
         
         return new_articles
     

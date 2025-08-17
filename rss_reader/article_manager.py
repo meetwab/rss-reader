@@ -83,12 +83,18 @@ class ArticleManager:
     
     def update_articles_history(self, url: str, new_articles: List[Dict[str, str]]):
         """
-        1. 把 RSS 订阅源的最新文章 (new_articles) 添加到 articles_history.json 文件中;
-        2. 如果文章链接已存在，则不重复添加。
+        将 RSS 订阅源的最新文章添加到历史记录中（纯存储操作）
+        
+        职责：
+        1. 加载现有文章历史
+        2. 基于链接去重，只添加新文章
+        3. 保存更新后的历史记录
+        
+        注意：此方法只负责存储，不处理任何业务逻辑（如AI摘要生成）
 
         Args:
             url (str): RSS 源链接
-            new_articles (List[Dict[str, str]]): 新获取的文章列表
+            new_articles (List[Dict[str, str]]): 新获取的文章列表（可能已包含AI摘要）
         """
         # 从 articles_history.json 文件中加载所有订阅源及其文章
         articles_history = self.file_handler.load_articles_history(self.articles_history_file)
