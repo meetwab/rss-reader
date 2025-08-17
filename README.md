@@ -1,6 +1,6 @@
 # RSS Reader
 
-一个功能完整的 RSS 订阅管理器，支持订阅管理、文章缓存、分页浏览和丰富的控制台界面。
+一个简易的、面向控制台的 RSS 订阅管理器，支持订阅管理、文章缓存、分页浏览。
 
 ## 功能特性
 
@@ -71,14 +71,6 @@ python run.py
 ### 方式二：直接运行主模块
 ```bash
 python -m rss_reader.main
-```
-
-### 方式三：作为包使用
-```python
-from rss_reader import RssApp
-
-app = RssApp()
-app.run()
 ```
 
 ## 设计原则
