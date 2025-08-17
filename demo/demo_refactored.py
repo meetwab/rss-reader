@@ -1,23 +1,25 @@
 
+# Standard library imports
+import html
 import json
 import os
-import html
+import re
 import sys
 import textwrap
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-import requests
-import feedparser
-import re
-from enum import Enum, auto
 import webbrowser
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
-from rich.columns import Columns
-from rich.markdown import Markdown
+from datetime import datetime
+from enum import Enum, auto
+from typing import Dict, List, Optional, Tuple
+
+# Third-party imports
+import feedparser
+import paginate
+import requests
 from bs4 import BeautifulSoup
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 class NavigationAction(Enum):
     """定义用户在视图之间导航的动作，以替代"魔术字符串"。"""
@@ -72,7 +74,7 @@ class FileHandler:
     @staticmethod
     def load_articles_history(filename: str) -> Dict[str, List[Dict]]:
         """
-        从指定的 JSON 文件中加载订阅源的历史文章。
+        从 articles_history.json 中加载订阅源的文章。
 
         Args:
             filename (str): 存储文章历史的 JSON 文件名。
@@ -93,7 +95,7 @@ class FileHandler:
     @staticmethod
     def save_articles_history(filename: str, articles_history: Dict[str, List[Dict]]) -> bool:
         """
-        将订阅源的历史文章保存到 JSON 文件
+        把订阅源的文章保存到 articles_history.json 文件中。
 
         Args:
             filename (str): 文件名
@@ -117,11 +119,58 @@ class ArticleManager:
         self.articles_history_file = articles_history_file
         self.file_handler = FileHandler()
     
-    def get_articles_history(self, url: str, page_size: int = 5, page: int = 1) -> Tuple[List[Dict[str, str]], bool, int, int]:
+    def _load_and_sort_articles_by_url(self, url: str) -> List[Dict[str, str]]:
         """
-        1. 获取 RSS 订阅源的历史文章；
-        2. 通过 页码 与 每页文章数量 进行分页，找出当前页面应该显示的文章；
-
+        1. 从 articles_history.json 文件中，根据 URL 获取 RSS 源的文章;
+        2. 将文章按时间排序。
+        
+        Args:
+            url (str): RSS 源链接
+            
+        Returns:
+            List[Dict[str, str]]: 按获取时间倒序排列的文章列表
+        """
+        # 从 articles_history.json 文件中加载所有订阅源及其文章
+        articles_history = self.file_handler.load_articles_history(self.articles_history_file)
+        # 获取指定 URL 的所有文章
+        all_articles = articles_history.get(url, [])
+        
+        # 按获取时间倒序排列，最新的在前面
+        all_articles.sort(key=lambda x: x.get('fetch_time', ''), reverse=True)
+        
+        return all_articles
+    
+    def _paginate_articles(self, articles: List[Dict[str, str]], page_size: int, page: int) -> Tuple[List[Dict[str, str]], bool, int, int]:
+        """
+        1. 使用 paginate 库对文章列表进行分页处理;
+        
+        Args:
+            articles (List[Dict[str, str]]): 文章列表
+            page_size (int): 每页文章数量
+            page (int): 页码（从 1 开始）
+            
+        Returns:
+            Tuple[List[Dict[str, str]], bool, int, int]: (当前页的文章列表，是否有下一页，当前页码，总页数)
+        """
+        # 如果没有文章，直接返回空
+        if not articles:
+            return [], False, 1, 1
+        
+        # 使用 paginate 库进行分页，page 参数也是从 1 开始
+        paginator = paginate.Page(articles, page=page, items_per_page=page_size)
+        
+        # 从 paginator 对象获取所需信息
+        page_articles = paginator.items
+        has_more = paginator.has_next()
+        current_page = paginator.page
+        total_pages = paginator.page_count
+        
+        return page_articles, has_more, current_page, total_pages
+    
+    def get_paginated_articles(self, url: str, page_size: int = 5, page: int = 1) -> Tuple[List[Dict[str, str]], bool, int, int]:
+        """
+        获取 RSS 订阅源的历史文章并进行分页处理
+        
         Args:
             url (str): RSS 源链接
             page_size (int): 每页文章数量
@@ -130,39 +179,25 @@ class ArticleManager:
         Returns:
             Tuple[List[Dict[str, str]], bool, int, int]: (当前页的文章列表，是否有下一页，当前页码，总页数)
         """
-        articles_history = self.file_handler.load_articles_history(self.articles_history_file)
-        all_articles = articles_history.get(url, [])
+        # 1. 加载并排序文章
+        all_articles = self._load_and_sort_articles_by_url(url)
         
-        # 按获取时间倒序排列，最新的在前面
-        all_articles.sort(key=lambda x: x.get('fetch_time', ''), reverse=True)
-        
-        # 计算总页数
-        total_articles = len(all_articles)
-        total_pages = (total_articles + page_size - 1) // page_size if total_articles > 0 else 1
-        
-        # 计算当前页面的起始和结束索引，获取当前页面的文章
-        start_idx = (page - 1) * page_size
-        end_idx = start_idx + page_size
-        page_articles = all_articles[start_idx:end_idx]
-        
-        # 检查是否有更多页
-        has_more = end_idx < len(all_articles)
-        
-        return page_articles, has_more, page, total_pages
+        # 2. 分页处理
+        return self._paginate_articles(all_articles, page_size, page)
     
     def update_articles_history(self, url: str, new_articles: List[Dict[str, str]]):
         """
-        1. 把最新的 RSS 订阅源的文章添加到 articles_history.json 文件中;
+        1. 把 RSS 订阅源的最新文章 (new_articles) 添加到 articles_history.json 文件中;
         2. 如果文章链接已存在，则不重复添加。
 
         Args:
             url (str): RSS 源链接
             new_articles (List[Dict[str, str]]): 新获取的文章列表
         """
-        # 加载现有历史记录
+        # 从 articles_history.json 文件中加载所有订阅源及其文章
         articles_history = self.file_handler.load_articles_history(self.articles_history_file)
         
-        # 获取该订阅的现有文章
+        # 获取目标订阅源的现有文章
         existing_articles = articles_history.get(url, [])
         # 创建一个集合用于快速查找现有文章链接
         existing_links = {article['link'] for article in existing_articles}
@@ -172,7 +207,7 @@ class ArticleManager:
             if article['link'] not in existing_links:
                 existing_articles.append(article)
                 existing_links.add(article['link'])
-        
+
         # 更新历史记录
         articles_history[url] = existing_articles
         
@@ -210,7 +245,11 @@ class RssParser:
             title = feed.feed.get("title")
             if not title:
                 print(" 无法从链接中获取标题，将使用默认名称。")
-                title = f"未命名订阅_{datetime.now():%Y%m%d%H%M%S}"
+                # 添加微秒级时间戳和随机数，确保名称唯一性
+                import random
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                random_suffix = random.randint(1000, 9999)
+                title = f"未命名订阅_{timestamp}_{random_suffix}"
             
             print(f"成功获取标题：{title}")
             return title, True
@@ -290,7 +329,7 @@ class RssParser:
     
     def fetch_and_save_articles(self, url: str, count: int = 3) -> List[Dict[str, str]]:
         """
-        1. 获取 RSS 源的最新文章并保存到 articles_history.json 文件中。
+        获取 RSS 源的最新文章并保存到 articles_history.json 文件中。
 
         Args:
             url (str): RSS 源链接
@@ -362,6 +401,25 @@ class SubscriptionManager:
         
         # 加载现有订阅
         subscriptions = self.file_handler.load_subscriptions(self.filename)
+        
+        # 检查是否已存在相同的 URL（避免重复订阅）
+        if url in subscriptions.values():
+            existing_name = next(name for name, existing_url in subscriptions.items() if existing_url == url)
+            warning_panel = Panel(
+                f"[yellow]⚠️  订阅已存在：'{existing_name}' [/yellow]",
+                style="yellow",
+                border_style="yellow"
+            )
+            self.console.print(warning_panel)
+            return False
+        
+        # 检查标题重名，如果重名则添加序号
+        original_title = title
+        counter = 1
+        while title in subscriptions:
+            title = f"{original_title} ({counter})"
+            counter += 1
+        
         # 添加新订阅
         subscriptions[title] = url
         
@@ -376,9 +434,27 @@ class SubscriptionManager:
             return True
         return False
     
+    def get_subscription_info(self, number: int) -> Tuple[Optional[str], Optional[str]]:
+        """
+        获取指定序号的订阅信息，用于删除前的确认显示
+
+        Args:
+            number (int): 订阅序号
+
+        Returns:
+            Tuple[Optional[str], Optional[str]]: (订阅名称，订阅 URL)，如果序号无效返回 (None, None)
+        """
+        subscriptions = self.file_handler.load_subscriptions(self.filename)
+        
+        if not subscriptions or number < 1 or number > len(subscriptions):
+            return None, None
+        
+        subscription_items = list(subscriptions.items())
+        return subscription_items[number - 1]
+
     def delete_subscription(self, number: int) -> bool:
         """
-        1. 删除指定的 RSS 订阅源；
+        1. 通过指定序号 (number)，删除对应的 RSS 订阅源；
         2. 从 subscriptions.json 文件中删除订阅信息。
 
         Args:
@@ -387,6 +463,7 @@ class SubscriptionManager:
         Returns:
             bool: 是否删除成功
         """
+        # 从 subscriptions.json 文件中加载订阅列表
         subscriptions = self.file_handler.load_subscriptions(self.filename)
         
         if not subscriptions:
@@ -398,12 +475,16 @@ class SubscriptionManager:
             self.console.print(warning_panel)
             return False
         
+        # 检查序号是否有效
         if number < 1 or number > len(subscriptions):
             print(f" 无效的订阅序号：{number}。请提供有效的序号。")
             return False
         
-        # 获取订阅名称
-        subscription_name = list(subscriptions.keys())[number - 1]
+        # 获取订阅列表，确保与显示时的顺序一致
+        subscription_items = list(subscriptions.items())
+        subscription_name, subscription_url = subscription_items[number - 1]
+        
+        # 从字典中删除订阅
         del subscriptions[subscription_name]
         
         # 保存更新后的订阅列表
@@ -595,6 +676,28 @@ class UserInterface:
         """获取用户输入"""
         return input(prompt).strip()
     
+    def confirm_delete_subscription(self, subscription_name: str, subscription_url: str) -> bool:
+        """
+        显示删除确认信息并获取用户确认
+
+        Args:
+            subscription_name (str): 订阅名称
+            subscription_url (str): 订阅链接
+
+        Returns:
+            bool: 用户是否确认删除
+        """
+        # 显示要删除的订阅信息
+        print(f"\n准备删除订阅：")
+        print(f"  名称：{subscription_name}")
+        print(f"  链接：{subscription_url}")
+
+        confirm = input("\n确认删除？(y/N): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            print("已取消删除操作。")
+            return False
+        return True
+    
     def handle_subscriptions_view(self) -> NavigationAction:
         """处理订阅列表视图"""
         while True:
@@ -622,25 +725,33 @@ class UserInterface:
                 
                 # 删除订阅源
                 if choice.lower() == "d":
+                    number_input = self.get_user_input("请输入要删除的订阅序号：")
                     try:
-                        number = int(self.get_user_input("请输入要删除的订阅序号："))
-                        self.subscription_manager.delete_subscription(number)
+                        number = int(number_input)
                     except ValueError:
                         print(" 无效的序号，请输入数字。")
+                        continue
+                    subscription_name, subscription_url = self.subscription_manager.get_subscription_info(number)
+                    if not (subscription_name and subscription_url):
+                        print(" 无效的订阅序号，请输入正确的序号。")
+                        continue
+                    if not self.confirm_delete_subscription(subscription_name, subscription_url):
+                        continue
+                    self.subscription_manager.delete_subscription(number)
                     continue
 
                 # 把用户输入转换为整数
                 choice_num = int(choice)
-                # 检查用户输入的序号是否在有效范围内：1～len(subscriptions)
-                if 1 <= choice_num <= len(subscriptions):
-                    # 获取指定订阅源的信息：name 和 url
-                    selected_name, selected_url = self.subscription_manager.get_subscription_by_index(choice_num)
-                    # 如果获取成功，则进入 "单个订阅视图"
-                    if selected_name and selected_url:
-                        action = self.handle_single_subscription_view(selected_name, selected_url)
-                        # 根据用户在 "单个订阅视图" 中的操作，返回相应的导航动作
-                        if action == NavigationAction.BACK_TO_HOME:
-                            return NavigationAction.BACK_TO_HOME
+                
+                # 获取指定订阅源的信息，get_subscription_by_index 会处理无效序号
+                selected_name, selected_url = self.subscription_manager.get_subscription_by_index(choice_num)
+                
+                # 如果获取成功，则进入 "单个订阅视图"
+                if selected_name and selected_url:
+                    action = self.handle_single_subscription_view(selected_name, selected_url)
+                    # 如果用户从文章列表视图选择返回首页，则直接退出当前循环
+                    if action == NavigationAction.BACK_TO_HOME:
+                        return NavigationAction.BACK_TO_HOME
                 else:
                     print(" 无效的选择，请输入正确的序号。")
                     
@@ -663,7 +774,7 @@ class UserInterface:
         
         while True:
             # 获取当前订阅源的历史文章，分页展示
-            articles, has_more, current_page, total_pages = self.article_manager.get_articles_history(
+            articles, _, current_page, total_pages = self.article_manager.get_paginated_articles(
                 subscription_url, page_size=5, page=current_page
             )
             
